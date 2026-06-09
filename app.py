@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
-import gspread
 
 # 1. 페이지 레이아웃을 wide(전체 화면)로 변경하여 영상과 화면을 시원하게 키웁니다!
 st.set_page_config(
@@ -11,7 +10,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# 구글 시트 원본 주소 정의
+# 구글 시트 원본 주소 및 정보 정의
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1opCa9vpXP5N-FC1r6_IQe7zgUaT8U1OyGko9C4IkttA/edit"
 WORKSHEET_NAME = "Sheet1"
 DEFAULT_COLUMNS = ["id", "reg_time", "title", "quantity", "price", "place", "contact", "password", "status"]
@@ -19,13 +18,13 @@ DEFAULT_COLUMNS = ["id", "reg_time", "title", "quantity", "price", "place", "con
 # 2. 구글 시트 데이터베이스 연결 및 에러 안전장치 (데이터 읽기)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    df_raw = conn.read(ttl=0)
+    df_raw = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=WORKSHEET_NAME, ttl=0)
     
     # 시트가 완전히 비어있거나 데이터가 없으면 기본 구조로 강제 초기화
     if df_raw is None or df_raw.empty:
         df_raw = pd.DataFrame(columns=DEFAULT_COLUMNS)
 except Exception as e:
-    st.error("구글 시트 연결에 실패했습니다. Secrets 설정을 확인해주세요!")
+    st.error("구글 시트 연결에 실패했습니다. 공유 권한 및 URL을 확인해주세요!")
     df_raw = pd.DataFrame(columns=DEFAULT_COLUMNS)
 
 # 혹시 특정 컬럼이 누락되었다면 자동 채워주기
@@ -128,16 +127,9 @@ with st.form("close_form", clear_on_submit=True):
             if not target_idx.empty and str(df_raw.loc[target_idx[0], 'password']) == str(input_password):
                 df_raw.loc[target_idx[0], 'status'] = "마감"
                 
-                # 링크 권한으로 우회하여 직접 업데이트 수행
+                # 안전하게 원래 패키지 커넥션으로 업데이트 수행
                 try:
-                    gc = gspread.public(SPREADSHEET_URL)
-                    sh = gc.open_by_url(SPREADSHEET_URL)
-                    worksheet = sh.worksheet(WORKSHEET_NAME)
-                    
-                    # gspread를 활용해 전체 데이터를 구글 시트에 덮어쓰기
-                    data_to_write = [df_raw.columns.values.tolist()] + df_raw.values.tolist()
-                    worksheet.update(data_to_write)
-                    
+                    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=WORKSHEET_NAME, data=df_raw)
                     st.success("🎉 모집이 완료되었습니다! 목록이 실시간으로 업데이트됩니다.")
                     st.rerun()
                 except Exception as update_err:
@@ -168,27 +160,23 @@ with st.form("match_form", clear_on_submit=True):
                 # 안전하게 새 ID 생성
                 next_id = int(df_raw['id'].max() + 1) if not df_raw.empty and df_raw['id'].notna().any() else 1
                 
-                new_row = [
-                    next_id, 
-                    datetime.now().strftime("%Y-%m-%d %H:%M"), 
-                    title, 
-                    quantity, 
-                    price, 
-                    place, 
-                    contact, 
-                    password, 
-                    "모집중"
-                ]
+                new_data = pd.DataFrame([{
+                    "id": next_id,
+                    "reg_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "title": title,
+                    "quantity": quantity,
+                    "price": price,
+                    "place": place,
+                    "contact": contact,
+                    "password": password,
+                    "status": "모집중"
+                }])
                 
-                # 링크 권한으로 우회하여 직접 행 추가 수행
+                updated_df = pd.concat([df_raw, new_data], ignore_index=True)
+                
+                # 안전하게 원래 패키지 커넥션으로 추가 데이터 업데이트 수행
                 try:
-                    gc = gspread.public(SPREADSHEET_URL)
-                    sh = gc.open_by_url(SPREADSHEET_URL)
-                    worksheet = sh.worksheet(WORKSHEET_NAME)
-                    
-                    # 구글 시트 맨 아래에 새 데이터 행 추가
-                    worksheet.append_row(new_row)
-                    
+                    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=WORKSHEET_NAME, data=updated_df)
                     st.success("🎤 반띵 모집 스웩 넘치게 등록 완료! 현황판을 확인하세요!")
                     st.balloons()
                     st.rerun()
