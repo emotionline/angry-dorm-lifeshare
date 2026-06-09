@@ -124,7 +124,7 @@ if close_submit:
         
         if not target_idx.empty and str(df_raw.loc[target_idx[0], 'password']) == str(input_password):
             df_raw.loc[target_idx[0], 'status'] = "마감"
-            conn.update(data=df_raw)
+            conn.update(worksheet="Sheet1", data=df_raw)
             st.success("🎉 모집이 완료되었습니다! 목록이 실시간으로 업데이트됩니다.")
             st.rerun()
         else:
@@ -167,7 +167,7 @@ if submit:
             
             # 기존 데이터에 결합 후 구글 시트 전송
             updated_df = pd.concat([df_raw, new_data], ignore_index=True)
-            conn.update(data=updated_df)
+            conn.update(worksheet="Sheet1", data=updated_df)
             st.success("🎤 반띵 모집 스웩 넘치게 등록 완료! 현황판을 확인하세요!")
             st.balloons()
             st.rerun()
