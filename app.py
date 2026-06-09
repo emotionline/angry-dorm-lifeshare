@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
+import gspread
 
 # 1. 페이지 레이아웃을 wide(전체 화면)로 변경하여 영상과 화면을 시원하게 키웁니다!
 st.set_page_config(
@@ -10,10 +11,12 @@ st.set_page_config(
     layout="wide"
 )
 
-# 기본 컬럼 구조 정의
+# 구글 시트 원본 주소 정의
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1opCa9vpXP5N-FC1r6_IQe7zgUaT8U1OyGko9C4IkttA/edit"
+WORKSHEET_NAME = "Sheet1"
 DEFAULT_COLUMNS = ["id", "reg_time", "title", "quantity", "price", "place", "contact", "password", "status"]
 
-# 2. 구글 시트 데이터베이스 연결 및 에러 안전장치
+# 2. 구글 시트 데이터베이스 연결 및 에러 안전장치 (데이터 읽기)
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df_raw = conn.read(ttl=0)
@@ -37,9 +40,9 @@ if not df_raw.empty:
 # 3. 힙한 상단 배너 & 스토리텔링
 st.title("🎤 쇼미더 반띵 : N분의 1 (Ban-Thing)")
 st.markdown("### `\"우린 N분의 1, 생필품 짜치게 안 나눠~ 🍚\"`")
-
 st.markdown("#### 🎧 배경음악 켜고 힙하게 반띵하기")
-# height를 500으로 키우고 레이아웃을 꽉 차게 확장했습니다!
+
+# 유튜브 배경음악 임베드
 st.markdown(
     '<iframe width="100%" height="500" src="https://www.youtube.com/embed/jCHriYAr6Qw" '
     'frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" '
@@ -112,27 +115,39 @@ with st.form("close_form", clear_on_submit=True):
         input_password = st.text_input("글 작성 시 비밀번호", type="password", placeholder="4자리 숫자")
         
     close_submit = st.form_submit_button("🏁 해당 모집 완료(마감) 처리하기")
-
-if close_submit:
-    if not selected_post_label:
-        st.warning("마감할 방이 없습니다.")
-    elif not input_password:
-        st.warning("비밀번호를 입력해주세요.")
-    else:
-        target_id = post_options[selected_post_label]
-        target_idx = df_raw[df_raw['id'] == target_id].index
-        
-        if not target_idx.empty and str(df_raw.loc[target_idx[0], 'password']) == str(input_password):
-            df_raw.loc[target_idx[0], 'status'] = "마감"
-            conn.update(worksheet="Sheet1", data=df_raw)
-            st.success("🎉 모집이 완료되었습니다! 목록이 실시간으로 업데이트됩니다.")
-            st.rerun()
+    
+    if close_submit:
+        if not selected_post_label:
+            st.warning("마감할 방이 없습니다.")
+        elif not input_password:
+            st.warning("비밀번호를 입력해주세요.")
         else:
-            st.error("❌ 비밀번호가 일치하지 않습니다! 방장이 맞으신지 확인해주세요. 😭")
+            target_id = post_options[selected_post_label]
+            target_idx = df_raw[df_raw['id'] == target_id].index
+            
+            if not target_idx.empty and str(df_raw.loc[target_idx[0], 'password']) == str(input_password):
+                df_raw.loc[target_idx[0], 'status'] = "마감"
+                
+                # 링크 권한으로 우회하여 직접 업데이트 수행
+                try:
+                    gc = gspread.public(SPREADSHEET_URL)
+                    sh = gc.open_by_url(SPREADSHEET_URL)
+                    worksheet = sh.worksheet(WORKSHEET_NAME)
+                    
+                    # gspread를 활용해 전체 데이터를 구글 시트에 덮어쓰기
+                    data_to_write = [df_raw.columns.values.tolist()] + df_raw.values.tolist()
+                    worksheet.update(data_to_write)
+                    
+                    st.success("🎉 모집이 완료되었습니다! 목록이 실시간으로 업데이트됩니다.")
+                    st.rerun()
+                except Exception as update_err:
+                    st.error(f"마감 처리 중 구글 시트 반영에 실패했습니다. (원인: {update_err})")
+            else:
+                st.error("❌ 비밀번호가 일치하지 않습니다! 방장이 맞으신지 확인해주세요. 😭")
 
 st.markdown("---")
 
-# 6. 새로운 모집 글 쓰기 (요청하신 1~6번 최적화)
+# 6. 새로운 모집 글 쓰기
 st.subheader("➕ 나도 같이 살 사람 모집하기")
 
 with st.form("match_form", clear_on_submit=True):
@@ -144,35 +159,43 @@ with st.form("match_form", clear_on_submit=True):
     password = st.text_input("6번 : 비밀번호 4자리 (방 마감할 때 방장에게 필요합니다.)", type="password", max_chars=4, placeholder="숫자 4자리")
     
     submit = st.form_submit_button("🚀 모집 시작하기")
-
-if submit:
-    if title and quantity and price and place and contact and password:
-        if not contact.startswith("http"):
-            st.error("오픈채팅방 링크는 http:// 또는 https:// 로 시작해야 합니다!")
+    
+    if submit:
+        if title and quantity and price and place and contact and password:
+            if not contact.startswith("http"):
+                st.error("오픈채팅방 링크는 http:// 또는 https:// 로 시작해야 합니다!")
+            else:
+                # 안전하게 새 ID 생성
+                next_id = int(df_raw['id'].max() + 1) if not df_raw.empty and df_raw['id'].notna().any() else 1
+                
+                new_row = [
+                    next_id, 
+                    datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                    title, 
+                    quantity, 
+                    price, 
+                    place, 
+                    contact, 
+                    password, 
+                    "모집중"
+                ]
+                
+                # 링크 권한으로 우회하여 직접 행 추가 수행
+                try:
+                    gc = gspread.public(SPREADSHEET_URL)
+                    sh = gc.open_by_url(SPREADSHEET_URL)
+                    worksheet = sh.worksheet(WORKSHEET_NAME)
+                    
+                    # 구글 시트 맨 아래에 새 데이터 행 추가
+                    worksheet.append_row(new_row)
+                    
+                    st.success("🎤 반띵 모집 스웩 넘치게 등록 완료! 현황판을 확인하세요!")
+                    st.balloons()
+                    st.rerun()
+                except Exception as append_err:
+                    st.error(f"데이터 등록 중 구글 시트 반영에 실패했습니다. (원인: {append_err})")
         else:
-            # 안전하게 새 ID 생성
-            next_id = int(df_raw['id'].max() + 1) if not df_raw.empty and df_raw['id'].notna().any() else 1
-            
-            new_data = pd.DataFrame([{
-                "id": next_id,
-                "reg_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "title": title,
-                "quantity": quantity,
-                "price": price,
-                "place": place,
-                "contact": contact,
-                "password": password,
-                "status": "모집중"
-            }])
-            
-            # 기존 데이터에 결합 후 구글 시트 전송
-            updated_df = pd.concat([df_raw, new_data], ignore_index=True)
-            conn.update(worksheet="Sheet1", data=updated_df)
-            st.success("🎤 반띵 모집 스웩 넘치게 등록 완료! 현황판을 확인하세요!")
-            st.balloons()
-            st.rerun()
-    else:
-        st.warning("모든 칸을 채워주세요! 학우들이 기다립니다. 🥺")
+            st.warning("모든 칸을 채워주세요! 학우들이 기다립니다. 🥺")
 
 st.markdown("---")
 st.caption("<p style='text-align: center; color: gray;'>© 2026 공주대학교 프로젝트 - Ban-Thing (Data History Enabled)</p>", unsafe_allow_html=True)
