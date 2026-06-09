@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
+import gspread
 
 # 1. 페이지 레이아웃을 wide(전체 화면)로 변경하여 영상과 화면을 시원하게 키웁니다!
 st.set_page_config(
@@ -127,9 +128,17 @@ with st.form("close_form", clear_on_submit=True):
             if not target_idx.empty and str(df_raw.loc[target_idx[0], 'password']) == str(input_password):
                 df_raw.loc[target_idx[0], 'status'] = "마감"
                 
-                # 안전하게 원래 패키지 커넥션으로 업데이트 수행
+                # 링크 편집자 권한을 활용한 직접 우회 업데이트 (st-gsheets 제약 우회)
                 try:
-                    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=WORKSHEET_NAME, data=df_raw)
+                    # gspread의 기본 클라이언트를 활용해 공개 링크용으로 강제 접근 처리
+                    gc = gspread.client.Client(auth=None)
+                    sh = gc.open_by_url(SPREADSHEET_URL)
+                    worksheet = sh.worksheet(WORKSHEET_NAME)
+                    
+                    # 데이터 프레임을 리스트 형태로 변환하여 시트 덮어쓰기
+                    df_as_list = [df_raw.columns.values.tolist()] + df_raw.fillna("").values.tolist()
+                    worksheet.update('A1', df_as_list)
+                    
                     st.success("🎉 모집이 완료되었습니다! 목록이 실시간으로 업데이트됩니다.")
                     st.rerun()
                 except Exception as update_err:
@@ -160,23 +169,27 @@ with st.form("match_form", clear_on_submit=True):
                 # 안전하게 새 ID 생성
                 next_id = int(df_raw['id'].max() + 1) if not df_raw.empty and df_raw['id'].notna().any() else 1
                 
-                new_data = pd.DataFrame([{
-                    "id": next_id,
-                    "reg_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "title": title,
-                    "quantity": quantity,
-                    "price": price,
-                    "place": place,
-                    "contact": contact,
-                    "password": password,
-                    "status": "모집중"
-                }])
+                new_row = [
+                    next_id, 
+                    datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                    title, 
+                    quantity, 
+                    price, 
+                    place, 
+                    contact, 
+                    password, 
+                    "모집중"
+                ]
                 
-                updated_df = pd.concat([df_raw, new_data], ignore_index=True)
-                
-                # 안전하게 원래 패키지 커넥션으로 추가 데이터 업데이트 수행
+                # 링크 편집자 권한을 활용한 직접 우회 데이터 추가 (st-gsheets 제약 우회)
                 try:
-                    conn.update(spreadsheet=SPREADSHEET_URL, worksheet=WORKSHEET_NAME, data=updated_df)
+                    gc = gspread.client.Client(auth=None)
+                    sh = gc.open_by_url(SPREADSHEET_URL)
+                    worksheet = sh.worksheet(WORKSHEET_NAME)
+                    
+                    # 맨 아래 행에 데이터 꽂아넣기
+                    worksheet.append_row(new_row)
+                    
                     st.success("🎤 반띵 모집 스웩 넘치게 등록 완료! 현황판을 확인하세요!")
                     st.balloons()
                     st.rerun()
